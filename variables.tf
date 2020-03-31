@@ -206,11 +206,19 @@ variable "disable_api_termination" {
 variable "max_size" {
   type        = number
   description = "The maximum size of the autoscale group"
+  default     = 1
 }
 
 variable "min_size" {
   type        = number
   description = "The minimum size of the autoscale group"
+  default     = 1
+}
+
+variable "desired_capacity" {
+  type        = number
+  description = "The number of Amazon EC2 instances that should be running in the group"
+  default     = 1
 }
 
 variable "subnet_ids" {
