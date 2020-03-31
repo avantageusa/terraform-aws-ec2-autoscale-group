@@ -1,229 +1,207 @@
-module "label" {
-  source     = "git::https://github.com/cloudposse/terraform-null-label.git?ref=tags/0.15.0"
-  namespace  = var.namespace
-  name       = var.name
-  stage      = var.stage
-  delimiter  = var.delimiter
-  attributes = var.attributes
-  tags       = var.tags
-  enabled    = var.enabled
+resource "aws_security_group" "this" {
+  count       = var.enabled ? 1 : 0
+  name        = var.name
+  description = "Allow inbound traffic from Security Groups and CIDRs"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port       = var.db_port
+    to_port         = var.db_port
+    protocol        = "tcp"
+    security_groups = var.security_groups
+  }
+
+  ingress {
+    from_port   = var.db_port
+    to_port     = var.db_port
+    protocol    = "tcp"
+    cidr_blocks = var.allowed_cidr_blocks
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(
+    var.tags,
+    {
+      "Name" = format("%s", var.name)
+    },
+  )
 }
 
-resource "aws_launch_template" "default" {
-  count = var.enabled ? 1 : 0
+resource "aws_rds_cluster" "this" {
+  count                               = var.enabled ? 1 : 0
+  cluster_identifier                  = var.name
+  database_name                       = var.db_name
+  master_username                     = var.admin_user
+  master_password                     = var.admin_password
+  backup_retention_period             = var.retention_period
+  preferred_backup_window             = var.backup_window
+  final_snapshot_identifier           = lower(var.name)
+  skip_final_snapshot                 = var.skip_final_snapshot
+  apply_immediately                   = var.apply_immediately
+  storage_encrypted                   = var.storage_encrypted
+  kms_key_id                          = var.kms_key_arn
+  source_region                       = var.source_region
+  snapshot_identifier                 = var.snapshot_identifier
+  vpc_security_group_ids              = compact(flatten([join("", aws_security_group.this.*.id), var.vpc_security_group_ids]))
+  preferred_maintenance_window        = var.maintenance_window
+  db_subnet_group_name                = join("", aws_db_subnet_group.this.*.name)
+  db_cluster_parameter_group_name     = join("", aws_rds_cluster_parameter_group.this.*.name)
+  iam_database_authentication_enabled = var.iam_database_authentication_enabled
+  tags                                = var.tags
+  engine                              = var.engine
+  engine_version                      = var.engine_version
+  engine_mode                         = var.engine_mode
+  global_cluster_identifier           = var.global_cluster_identifier
+  iam_roles                           = var.iam_roles
+  backtrack_window                    = var.backtrack_window
 
-  name_prefix = format("%s%s", module.label.id, var.delimiter)
-
-  dynamic "block_device_mappings" {
-    for_each = var.block_device_mappings
+  dynamic "scaling_configuration" {
+    for_each = var.scaling_configuration
     content {
-      device_name  = lookup(block_device_mappings.value, "device_name", null)
-      no_device    = lookup(block_device_mappings.value, "no_device", null)
-      virtual_name = lookup(block_device_mappings.value, "virtual_name", null)
-
-      dynamic "ebs" {
-        for_each = flatten(list(lookup(block_device_mappings.value, "ebs", [])))
-        content {
-          delete_on_termination = lookup(ebs.value, "delete_on_termination", null)
-          encrypted             = lookup(ebs.value, "encrypted", null)
-          iops                  = lookup(ebs.value, "iops", null)
-          kms_key_id            = lookup(ebs.value, "kms_key_id", null)
-          snapshot_id           = lookup(ebs.value, "snapshot_id", null)
-          volume_size           = lookup(ebs.value, "volume_size", null)
-          volume_type           = lookup(ebs.value, "volume_type", null)
-        }
-      }
+      auto_pause               = lookup(scaling_configuration.value, "auto_pause", null)
+      max_capacity             = lookup(scaling_configuration.value, "max_capacity", null)
+      min_capacity             = lookup(scaling_configuration.value, "min_capacity", null)
+      seconds_until_auto_pause = lookup(scaling_configuration.value, "seconds_until_auto_pause", null)
+      timeout_action           = lookup(scaling_configuration.value, "timeout_action", null)
     }
   }
 
-  dynamic "credit_specification" {
-    for_each = var.credit_specification != null ? [var.credit_specification] : []
-    content {
-      cpu_credits = lookup(credit_specification.value, "cpu_credits", null)
-    }
-  }
-
-  disable_api_termination = var.disable_api_termination
-  ebs_optimized           = var.ebs_optimized
-
-  dynamic "elastic_gpu_specifications" {
-    for_each = var.elastic_gpu_specifications != null ? [var.elastic_gpu_specifications] : []
-    content {
-      type = lookup(elastic_gpu_specifications.value, "type", null)
-    }
-  }
-
-  image_id                             = var.image_id
-  instance_initiated_shutdown_behavior = var.instance_initiated_shutdown_behavior
-
-  dynamic "instance_market_options" {
-    for_each = var.instance_market_options != null ? [var.instance_market_options] : []
-    content {
-      market_type = lookup(instance_market_options.value, "market_type", null)
-
-      dynamic "spot_options" {
-        for_each = (instance_market_options.value.spot_options != null ?
-        [instance_market_options.value.spot_options] : [])
-        content {
-          block_duration_minutes         = lookup(spot_options.value, "block_duration_minutes", null)
-          instance_interruption_behavior = lookup(spot_options.value, "instance_interruption_behavior", null)
-          max_price                      = lookup(spot_options.value, "max_price", null)
-          spot_instance_type             = lookup(spot_options.value, "spot_instance_type", null)
-          valid_until                    = lookup(spot_options.value, "valid_until", null)
-        }
-      }
-    }
-  }
-
-  instance_type = var.instance_type
-  key_name      = var.key_name
-
-  dynamic "placement" {
-    for_each = var.placement != null ? [var.placement] : []
-    content {
-      affinity          = lookup(placement.value, "affinity", null)
-      availability_zone = lookup(placement.value, "availability_zone", null)
-      group_name        = lookup(placement.value, "group_name", null)
-      host_id           = lookup(placement.value, "host_id", null)
-      tenancy           = lookup(placement.value, "tenancy", null)
-    }
-  }
-
-  user_data = var.user_data_base64
-
-  iam_instance_profile {
-    name = var.iam_instance_profile_name
-  }
-
-  monitoring {
-    enabled = var.enable_monitoring
-  }
-
-  # https://github.com/terraform-providers/terraform-provider-aws/issues/4570
-  network_interfaces {
-    description                 = module.label.id
-    device_index                = 0
-    associate_public_ip_address = var.associate_public_ip_address
-    delete_on_termination       = true
-    security_groups             = var.security_group_ids
-  }
-
-  tag_specifications {
-    resource_type = "volume"
-    tags          = module.label.tags
-  }
-
-  tag_specifications {
-    resource_type = "instance"
-    tags          = module.label.tags
-  }
-
-  tags = module.label.tags
-
-  lifecycle {
-    create_before_destroy = true
-  }
+  replication_source_identifier   = var.replication_source_identifier
+  enabled_cloudwatch_logs_exports = var.enabled_cloudwatch_logs_exports
+  deletion_protection             = var.deletion_protection
 }
 
 locals {
-  launch_template_block = {
-    id      = join("", aws_launch_template.default.*.id)
-    version = var.launch_template_version != "" ? var.launch_template_version : join("", aws_launch_template.default.*.latest_version)
-  }
-  launch_template = (
-    var.mixed_instances_policy == null ? local.launch_template_block
-  : null)
-  mixed_instances_policy = (
-    var.mixed_instances_policy == null ? null : {
-      instances_distribution = var.mixed_instances_policy.instances_distribution
-      launch_template        = local.launch_template_block
-      override               = var.mixed_instances_policy.override
-  })
+  min_instance_count     = var.autoscaling_enabled ? var.autoscaling_min_capacity : var.cluster_size
+  cluster_instance_count = var.enabled ? local.min_instance_count : 0
 }
 
-resource "aws_autoscaling_group" "default" {
-  count = var.enabled ? 1 : 0
+resource "aws_rds_cluster_instance" "this" {
+  count                           = local.cluster_instance_count
+  identifier_prefix               = var.name
+  cluster_identifier              = join("", aws_rds_cluster.this.*.id)
+  instance_class                  = var.instance_type
+  db_subnet_group_name            = join("", aws_db_subnet_group.this.*.name)
+  db_parameter_group_name         = join("", aws_db_parameter_group.this.*.name)
+  publicly_accessible             = var.publicly_accessible
+  tags                            = var.tags
+  engine                          = var.engine
+  engine_version                  = var.engine_version
+  monitoring_interval             = var.rds_monitoring_interval
+  monitoring_role_arn             = var.rds_monitoring_role_arn
+  performance_insights_enabled    = var.performance_insights_enabled
+  performance_insights_kms_key_id = var.performance_insights_kms_key_id
+  availability_zone               = var.instance_availability_zone
+}
 
-  name_prefix               = format("%s%s", module.label.id, var.delimiter)
-  vpc_zone_identifier       = var.subnet_ids
-  max_size                  = var.max_size
-  min_size                  = var.min_size
-  load_balancers            = var.load_balancers
-  health_check_grace_period = var.health_check_grace_period
-  health_check_type         = var.health_check_type
-  min_elb_capacity          = var.min_elb_capacity
-  wait_for_elb_capacity     = var.wait_for_elb_capacity
-  target_group_arns         = var.target_group_arns
-  default_cooldown          = var.default_cooldown
-  force_delete              = var.force_delete
-  termination_policies      = var.termination_policies
-  suspended_processes       = var.suspended_processes
-  placement_group           = var.placement_group
-  enabled_metrics           = var.enabled_metrics
-  metrics_granularity       = var.metrics_granularity
-  wait_for_capacity_timeout = var.wait_for_capacity_timeout
-  protect_from_scale_in     = var.protect_from_scale_in
-  service_linked_role_arn   = var.service_linked_role_arn
+resource "aws_db_subnet_group" "this" {
+  count       = var.enabled ? 1 : 0
+  name        = var.name
+  description = "Allowed subnets for DB cluster instances"
+  subnet_ids  = var.subnets
+  tags        = var.tags
+}
 
-  dynamic "launch_template" {
-    for_each = (local.launch_template != null ?
-    [local.launch_template] : [])
+resource "aws_rds_cluster_parameter_group" "this" {
+  count       = var.enabled ? 1 : 0
+  name        = var.name
+  description = "DB cluster parameter group"
+  family      = var.cluster_family
+
+  dynamic "parameter" {
+    for_each = var.cluster_parameters
     content {
-      id      = local.launch_template_block.id
-      version = local.launch_template_block.version
+      apply_method = lookup(parameter.value, "apply_method", null)
+      name         = parameter.value.name
+      value        = parameter.value.value
     }
   }
 
-  dynamic "mixed_instances_policy" {
-    for_each = (local.mixed_instances_policy != null ?
-    [local.mixed_instances_policy] : [])
-    content {
-      dynamic "instances_distribution" {
-        for_each = (
-          mixed_instances_policy.value.instances_distribution != null ?
-        [mixed_instances_policy.value.instances_distribution] : [])
-        content {
-          on_demand_allocation_strategy = lookup(
-          instances_distribution.value, "on_demand_allocation_strategy", null)
-          on_demand_base_capacity = lookup(
-          instances_distribution.value, "on_demand_base_capacity", null)
-          on_demand_percentage_above_base_capacity = lookup(
-          instances_distribution.value, "on_demand_percentage_above_base_capacity", null)
-          spot_allocation_strategy = lookup(
-          instances_distribution.value, "spot_allocation_strategy", null)
-          spot_instance_pools = lookup(
-          instances_distribution.value, "spot_instance_pools", null)
-          spot_max_price = lookup(
-          instances_distribution.value, "spot_max_price", null)
-        }
-      }
-      launch_template {
-        launch_template_specification {
-          launch_template_id = mixed_instances_policy.value.launch_template.id
-          version            = mixed_instances_policy.value.launch_template.version
-        }
-        dynamic "override" {
-          for_each = (mixed_instances_policy.value.override != null ?
-          mixed_instances_policy.value.override : [])
-          content {
-            instance_type     = lookup(override.value, "instance_type", null)
-            weighted_capacity = lookup(override.value, "weighted_capacity", null)
-          }
-        }
-      }
-    }
-  }
-
-  tags = flatten([
-    for key in keys(module.label.tags) :
+  tags = merge(
+    var.tags,
     {
-      key                 = key
-      value               = module.label.tags[key]
-      propagate_at_launch = true
-    }
-  ])
+      "Name" = format("%s", var.name)
+    },
+  )
+}
 
-  lifecycle {
-    create_before_destroy = true
+resource "aws_db_parameter_group" "this" {
+  count       = var.enabled ? 1 : 0
+  name        = var.name
+  description = "DB instance parameter group"
+  family      = var.cluster_family
+
+  dynamic "parameter" {
+    for_each = var.instance_parameters
+    content {
+      apply_method = lookup(parameter.value, "apply_method", null)
+      name         = parameter.value.name
+      value        = parameter.value.value
+    }
+  }
+
+  tags = merge(
+    var.tags,
+    {
+      "Name" = format("%s", var.name)
+    },
+  )
+}
+
+locals {
+  cluster_dns_name_default = "master.${var.name}"
+  cluster_dns_name         = var.cluster_dns_name != "" ? var.cluster_dns_name : local.cluster_dns_name_default
+  reader_dns_name_default  = "replicas.${var.name}"
+  reader_dns_name          = var.reader_dns_name != "" ? var.reader_dns_name : local.reader_dns_name_default
+}
+
+module "dns_master" {
+  source  = "git::https://github.com/cloudposse/terraform-aws-route53-cluster-hostname.git?ref=tags/0.3.0"
+  enabled = var.enabled && length(var.zone_id) > 0 ? true : false
+  name    = local.cluster_dns_name
+  zone_id = var.zone_id
+  records = coalescelist(aws_rds_cluster.this.*.endpoint, [""])
+}
+
+module "dns_replicas" {
+  source  = "git::https://github.com/cloudposse/terraform-aws-route53-cluster-hostname.git?ref=tags/0.3.0"
+  enabled = var.enabled && length(var.zone_id) > 0 && var.engine_mode != "serverless" ? true : false
+  name    = local.reader_dns_name
+  zone_id = var.zone_id
+  records = coalescelist(aws_rds_cluster.this.*.reader_endpoint, [""])
+}
+
+resource "aws_appautoscaling_target" "replicas" {
+  count              = var.enabled && var.autoscaling_enabled ? 1 : 0
+  service_namespace  = "rds"
+  scalable_dimension = "rds:cluster:ReadReplicaCount"
+  resource_id        = "cluster:${join("", aws_rds_cluster.this.*.id)}"
+  min_capacity       = var.autoscaling_min_capacity
+  max_capacity       = var.autoscaling_max_capacity
+}
+
+resource "aws_appautoscaling_policy" "replicas" {
+  count              = var.enabled && var.autoscaling_enabled ? 1 : 0
+  name               = var.name
+  service_namespace  = join("", aws_appautoscaling_target.replicas.*.service_namespace)
+  scalable_dimension = join("", aws_appautoscaling_target.replicas.*.scalable_dimension)
+  resource_id        = join("", aws_appautoscaling_target.replicas.*.resource_id)
+  policy_type        = var.autoscaling_policy_type
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = var.autoscaling_target_metrics
+    }
+
+    disable_scale_in   = false
+    target_value       = var.autoscaling_target_value
+    scale_in_cooldown  = var.autoscaling_scale_in_cooldown
+    scale_out_cooldown = var.autoscaling_scale_out_cooldown
   }
 }
